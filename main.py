@@ -1,53 +1,102 @@
-# This is a sample Python script.
+# _*_ codign:utf8 _*_
+"""====================================
+@Author:Sadam·Sadik
+@Email：1903249375@qq.com
+@Date：2023/8/17
+@Software: PyCharm
+@disc:
+======================================="""
+import logging
+import re
+import sys
+from urllib.parse import urlparse
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+import click
+import elasticsearch
+from elasticsearch import Elasticsearch
+from elasticsearch.helpers import bulk
 
-from ip_helper import getGeoLocation
-import csv
-def cutByMonth():
-    # TODO：要完善后期部分， 可以按照 Oct，Nov，Feb这样分开成多个文件，方便操作。实现一键切割。
-    with open("2022/www.xjip.info.log_aGyYz6.tar/www.xjip.info.log", 'r', encoding="utf-8") as rf:
-        with open("2022/10/www.xjip.info.log", 'w', encoding="utf-8") as wf:
-            while True:
-                l: str = rf.readline()
-                if "/Oct/2022" in l:
-                    wf.write(l)
-                    print(l)
-                if "/Nov/2022" in l:
-                    print("获取10月份的成功")
-                    break
+from lib import logger
+
+PATTERN = r'''(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - (.*?) \[(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2} \+\d{4})\] "(\w*)\s?(.*?)\s?(HTTP/1\.0|HTTP/1\.1|HTTP/2\.0)?" (\d{3}) (\d+) "(.*?)" "(.*?)"'''
+ip_count = {}
+status_count = {}
+top_urls = {}
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    import re
+def send_bulk_request(client, actions):
+    try:
+        resp = bulk(client, actions=actions)
+        return resp
+    except elasticsearch.helpers.BulkIndexError as e:
+        logging.error(e)
+        for err in e.errors:
+            logging.error(err)
+        sys.exit(1)
 
-    pattern = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}')
-    ips = {}
-    with open("2022/10/www.xjip.info.log", 'r', encoding="utf-8") as f:
-        ln = 0
-        for i in f:
-            l: str = f.readline()
-            ln += 1
-            m = pattern.search(l)
-            if m is None:
-                print(ln, l)
+
+@click.command()
+@click.option("-fp", "--file-path", prompt="请输入日志文件路径", type=str)
+@click.option("-d", "--domain", prompt="请输入日志所属于的站点域名", type=str)
+@click.option("--es-host", prompt="请输入ElasticSearch弹性检索引擎的访问地址（ip:port)", type=str)
+@click.option("--es-username", prompt="请输入ElasticSearch弹性检索引擎的用户名", type=str)
+@click.option("--es-password", prompt="请输入ElasticSearch弹性检索引擎的密码", type=str)
+@click.option("--es-ca", prompt="请输入ElasticSearch弹性检索引擎的通信加密证书（路径）", type=str)
+@click.option("-bs", "--batch-size", type=int, default=10000)
+def main(file_path, domain, es_host, es_username, es_password, es_ca, batch_size):
+    index = f"nginx-log-{domain}"
+    logging.info(f"file path:[{file_path}], index:{index}")
+    esClient = Elasticsearch(es_host, basic_auth=(es_username, es_password), ca_certs=es_ca, request_timeout=3600)
+    resp = esClient.indices.create(index=index)
+    logging.info(f"创建索引[{index}]成功！:{resp}")
+    with open(file_path) as f:
+        actions = []
+        for i, line in enumerate(f):
+            line_num = i + 1
+            match = re.search(PATTERN, line)
+            if match is None:
+                print(f"异常记录：{line_num}:[{line}]")
+                sys.exit(1)
             else:
-                ip = l[m.regs[0][0]:m.regs[0][1]]
-                if ips.keys().__contains__(ip):
-                    ips[ip] += 1
-                else:
-                    ips.setdefault(ip, 1)
-    l = sorted(ips.keys(), key=lambda item: ips.get(item), reverse=True)
-    i = 1
-    with open("2022/10/www.xjip.info.ip.csv",'w',encoding='utf-8') as f:
-        cw = csv.writer(f)
-        for ip in l:
-            count = ips.get(ip)
-            location = getGeoLocation(ip)
-            print(str(i).rjust(4, " "), ip.ljust(15, " "), str(count).rjust(5, " "), location)
-            cw.writerow([i, ip, count, location])
-            i += 1
+                ip, RemoteUser, time, method, url, HTTP_Version, status, ResponseSize, Referer, ua = match.groups()
+                result = urlparse(url)
+                print(line_num, time, ip, method, HTTP_Version, result.path, result.query, status, ResponseSize,
+                      RemoteUser, Referer, ua)
+                if result.params != '':
+                    pass
+                action = {
+                    "_index": index,
+                    "_id": line_num,
+                    "_source": {
+                        "lineNum": line_num,
+                        "ip": ip,
+                        "time": time,
+                        "method": method,
+                        "HTTP_Version": HTTP_Version,
+                        "path": result.path,
+                        "query": result.query,
+                        "status": status,
+                        "ResponseSize": ResponseSize,
+                        "RemoteUser": RemoteUser,
+                        "UserAgent": ua,
+                        "Referer": Referer
+                    }
+                }
+                actions.append(action)
+                ip_count[ip] = ip_count.get(ip, 0) + 1
+                status_count[status] = status_count.get(status, 0) + 1
+                top_urls[url] = top_urls.get(url, 0) + 1
+            if line_num % batch_size == 0:
+                # 按周期进行一次批量上传
+                resp = send_bulk_request(esClient, actions)
+                actions = []
+        # 最后一次进行批量上传
+        resp = send_bulk_request(esClient, actions)
+        print('Unique IPs:', len(ip_count))
+        print('Status codes:', status_count)
+        print('Top URLs:', dict(sorted(top_urls.items(), key=lambda x: x[1], reverse=True)[:5]))
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+
+if __name__ == '__main__':
+    logger.init("LogAnalyser")
+    main()
