@@ -3,8 +3,9 @@
 # Press ⌃R to execute it or replace it with your code.
 # Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
 
-from ip_helper import getGeoLocation
 import csv
+
+from ip_helper import getGeoLocation
 
 
 def cutByMonth():
@@ -21,8 +22,7 @@ def cutByMonth():
                     break
 
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
+def test():
     import re
 
     pattern = re.compile(r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}')
@@ -52,4 +52,22 @@ if __name__ == '__main__':
             cw.writerow([i, ip, count, location])
             i += 1
 
+
+# Press the green button in the gutter to run the script.
+if __name__ == '__main__':
+    n = 100000  # 指定行号
+    with open("/Users/shadikesadamu/Downloads/www.1.ink.log") as f:
+        f.seek(0)
+        for i, line in enumerate(f):
+            if i >= n - 1:
+                break
+        lineNum = n
+        while True:
+            lineNum += 1
+            line = f.readline()
+            if not line:
+                break
+            print(lineNum, line)
+            if lineNum - n >= 200:
+                break
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/

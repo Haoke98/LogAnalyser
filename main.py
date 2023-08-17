@@ -47,12 +47,34 @@ def main(file_path, domain, es_host, es_username, es_password, es_ca, batch_size
     index = f"nginx-log-{domain}"
     logging.info(f"file path:[{file_path}], index:{index}")
     esClient = Elasticsearch(es_host, basic_auth=(es_username, es_password), ca_certs=es_ca, request_timeout=3600)
-    resp = esClient.indices.create(index=index)
-    logging.info(f"创建索引[{index}]成功！:{resp}")
+    isExists = esClient.indices.exists(index=index)
+    max_line_num = 0
+    if isExists:
+        resp = esClient.search(index=index, size=0, aggs={
+            "max_line_num": {
+                "max": {
+                    "field": "lineNum"
+                }
+            }
+        })
+        max_line_num = int(resp.body["aggregations"]["max_line_num"]["value"])
+    else:
+        resp = esClient.indices.create(index=index)
+        logging.info(f"创建索引[{index}]成功！:{resp}")
+    start_line_num = max_line_num
     with open(file_path) as f:
-        actions = []
+        f.seek(0)
         for i, line in enumerate(f):
-            line_num = i + 1
+            if i >= start_line_num - 1:
+                break
+
+        actions = []
+        line_num = start_line_num
+        while True:
+            line_num += 1
+            line = f.readline()
+            if not line:
+                break
             match = re.search(PATTERN, line)
             if match is None:
                 print(f"异常记录：{line_num}:[{line}]")
